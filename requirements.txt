@@ -1,0 +1,14 @@
+cx_Freeze>=6.15.0
+pandas>=1.5.0
+openpyxl>=3.0.0
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+requests-cache>=1.0.0
+lxml>=4.9.0
+html5lib>=1.1
+xlsxwriter>=3.0.0
+certifi>=2022.0.0
+chardet>=5.0.0
+idna>=3.4
+soupsieve>=2.3.0
+urllib3>=1.26.0
