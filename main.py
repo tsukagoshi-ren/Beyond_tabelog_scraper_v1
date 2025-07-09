@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import os
 from datetime import datetime
@@ -12,6 +12,10 @@ import threading
 
 os.environ['TK_SILENCE_DEPRECATION'] = '1'
 from cat import prefectures
+
+# グローバル変数
+is_scraping = False
+stop_scraping = False
 
 def generate_tabelog_url(prefecture_code, start_page, new_open_mode=False):
     """
@@ -142,27 +146,39 @@ def update_status(text):
     status_label.config(text=text)
     window.update()
 
-def disable_controls():
-    """スクレイピング中のコントロールを無効化する"""
-    prefecture_combo.configure(state="disabled")
-    start_page_entry.configure(state="disabled")
-    fifty_page_check.configure(state="disabled")
-    new_open_check.configure(state="disabled")
-    area_scrape_button.configure(state="disabled")
-
-def enable_controls():
-    """スクレイピング終了後にコントロールを有効化する"""
-    prefecture_combo.configure(state="normal")
-    start_page_entry.configure(state="normal")
-    fifty_page_check.configure(state="normal")
-    new_open_check.configure(state="normal")
-    area_scrape_button.configure(state="normal")
-
 def get_prefecture_code(prefecture):
     """都道府県名から都道府県コードを取得する"""
     if prefecture == "全国":
         return ""
     return prefectures.prefectures_values.get(prefecture, "")
+
+def browse_save_path():
+    """保存先フォルダを選択する"""
+    folder_path = filedialog.askdirectory(title="保存先フォルダを選択してください")
+    if folder_path:
+        save_path_var.set(folder_path)
+
+def generate_default_filename():
+    """デフォルトのファイル名を生成する"""
+    prefecture = prefecture_combo.get()
+    new_open_mode = new_open_var.get()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    if prefecture != "全国":
+        file_prefix = prefecture
+    else:
+        file_prefix = "全国"
+        
+    if new_open_mode:
+        file_prefix += "_ニューオープン"
+        
+    return f"{file_prefix}_scraped_data_{timestamp}.xlsx"
+
+def stop_scraping_process():
+    """スクレイピングを停止する"""
+    global stop_scraping
+    stop_scraping = True
+    update_status("スクレイピングを停止しています...")
 
 def scrape_data_thread():
     """別スレッドでスクレイピングを実行する（UIのフリーズを防ぐ）"""
@@ -172,17 +188,54 @@ def scrape_data_thread():
 
 def scrape_data():
     """スクレイピングを実行する"""
-    disable_controls()
+    global is_scraping, stop_scraping
+    is_scraping = True
+    stop_scraping = False
+    
+    # 検索中タブに切り替え
+    notebook.select(search_tab)
+    
+    # 検索条件タブを無効化
+    notebook.tab(condition_tab, state="disabled")
+    
     update_status("スクレイピングの準備中...")
     
     prefecture = prefecture_combo.get()
     start_page = int(start_page_entry.get()) if start_page_entry.get() else 1
-    fifty_page_mode = fifty_page_var.get()
+    end_page = int(end_page_entry.get()) if end_page_entry.get() else 60
     new_open_mode = new_open_var.get()
-    max_pages = 50 if fifty_page_mode else 999
     
-    # スクレイピングする最大ページ数を計算
-    end_page = start_page + max_pages - 1
+    # ページ範囲の検証
+    if start_page < 1 or end_page < 1 or start_page > end_page:
+        messagebox.showerror("エラー", "ページ範囲が正しくありません。開始ページと終了ページを正しく入力してください。")
+        notebook.tab(condition_tab, state="normal")
+        notebook.select(condition_tab)
+        is_scraping = False
+        return
+    
+    if end_page > 60:
+        messagebox.showerror("エラー", "終了ページは60以下で入力してください。")
+        notebook.tab(condition_tab, state="normal")
+        notebook.select(condition_tab)
+        is_scraping = False
+        return
+    
+    # 検索予定ページ数を計算
+    total_pages = end_page - start_page + 1
+    
+    # 保存先とファイル名の取得
+    save_path = save_path_var.get()
+    filename = filename_entry.get()
+    
+    if not save_path:
+        save_path = os.path.expanduser("~\\Downloads")
+    
+    if not filename:
+        filename = generate_default_filename()
+    
+    # 拡張子の確認
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
     
     prefecture_code = get_prefecture_code(prefecture)
     
@@ -197,9 +250,9 @@ def scrape_data():
     # 進捗バーの初期化
     progress_var.set(0)
     
-    while current_url and page_count <= end_page:
+    while current_url and page_count <= end_page and not stop_scraping:
         update_status(f"スクレイピング中: ページ {page_count}/{end_page}")
-        update_progress(pages_scraped + 1, max_pages)
+        update_progress(pages_scraped + 1, total_pages)
         
         print(f"スクレイピング中: {current_url}, ページ数: {page_count}")
         try:
@@ -214,6 +267,9 @@ def scrape_data():
                 break
                 
             for i, shop in enumerate(shop_list):
+                if stop_scraping:
+                    break
+                    
                 update_status(f"ページ {page_count}/{end_page} - 店舗 {i+1}/{shop_count} スクレイピング中")
                 detail_url_element = shop.find('a', class_='list-rst__rst-name-target') or shop.find('a', class_='list-rst__title-target')
                 if detail_url_element and 'href' in detail_url_element.attrs:
@@ -227,12 +283,15 @@ def scrape_data():
                 # 負荷軽減のための待機
                 time.sleep(0.5)
             
+            if stop_scraping:
+                break
+            
             # このページのスクレイピングが完了
             pages_scraped += 1
             
-            # 最大ページ数に達したかチェック
-            if pages_scraped >= max_pages:
-                print(f"最大ページ数({max_pages}ページ)に達しました。スクレイピングを終了します。")
+            # 指定された終了ページに達したかチェック
+            if page_count >= end_page:
+                print(f"指定された終了ページ({end_page}ページ)に達しました。スクレイピングを終了します。")
                 break
             
             # 次のページを探す
@@ -260,55 +319,77 @@ def scrape_data():
             break
     
     # 結果の保存
-    if all_scraped_data:
+    if all_scraped_data and not stop_scraping:
         update_status("データをExcelに保存中...")
         df = pd.DataFrame(all_scraped_data)
         
         # 不要な空のデータを除外
         df = df[df['店舗名'] != '店舗名がありません']
         
-        download_dir = os.path.expanduser("~\\Downloads")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(save_path, filename)
         
-        if prefecture != "全国":
-            file_prefix = prefecture
-        else:
-            file_prefix = "全国"
-            
-        if new_open_mode:
-            file_prefix += "_ニューオープン"
-            
-        file_name = f"{file_prefix}_scraped_data_{timestamp}.xlsx"
-        file_path = os.path.join(download_dir, file_name)
-        
-        df.to_excel(file_path, index=False)
-        update_status(f"スクレイピングが完了しました。{file_name}に結果が保存されました。")
-        print(f'スクレイピングが完了しました。{file_name}に結果が保存されました。')
+        try:
+            df.to_excel(file_path, index=False)
+            update_status(f"スクレイピングが完了しました。{filename}に結果が保存されました。")
+            print(f'スクレイピングが完了しました。{filename}に結果が保存されました。')
+            messagebox.showinfo("完了", f"スクレイピングが完了しました。\n{file_path}に結果が保存されました。")
+        except Exception as e:
+            update_status(f"ファイル保存中にエラーが発生しました: {e}")
+            messagebox.showerror("エラー", f"ファイル保存中にエラーが発生しました: {e}")
+    elif stop_scraping:
+        update_status("スクレイピングが停止されました。")
+        messagebox.showinfo("停止", "スクレイピングが停止されました。")
     else:
         update_status("スクレイピングに失敗しました。データが取得できませんでした。")
+        messagebox.showerror("エラー", "スクレイピングに失敗しました。データが取得できませんでした。")
         print('スクレイピングに失敗しました。')
     
-    enable_controls()
+    # 検索条件タブを有効化
+    notebook.tab(condition_tab, state="normal")
+    
+    # 検索条件タブに切り替え
+    notebook.select(condition_tab)
+    
+    is_scraping = False
+    stop_scraping = False
+
+def on_filename_change(*args):
+    """ファイル名が変更されたときの処理"""
+    if not filename_entry.get():
+        filename_entry.insert(0, generate_default_filename())
 
 def create_gui():
     """GUIを作成する"""
-    global prefecture_combo, start_page_entry, fifty_page_var, area_scrape_button, new_open_var, window
-    global progress_var, progress_label, status_label, fifty_page_check, new_open_check
+    global prefecture_combo, start_page_entry, end_page_entry, new_open_var, window
+    global progress_var, progress_label, status_label, new_open_check
+    global notebook, condition_tab, search_tab, save_path_var, filename_entry
     
     window = tk.Tk()
     window.title("食べログスクレイピングツール")
-    window.geometry("500x520")
+    window.geometry("600x650")
     
     # タイトルラベル
     title_label = ttk.Label(window, text="食べログスクレイピングツール", font=("Helvetica", 16))
     title_label.pack(pady=10)
     
-    # メインフレーム
-    main_frame = ttk.Frame(window)
-    main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+    # ノートブック（タブ）の作成
+    notebook = ttk.Notebook(window)
+    notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+    
+    # 検索条件タブ
+    condition_tab = ttk.Frame(notebook)
+    notebook.add(condition_tab, text="検索条件")
+    
+    # 検索中タブ
+    search_tab = ttk.Frame(notebook)
+    notebook.add(search_tab, text="検索中")
+    
+    # === 検索条件タブの内容 ===
+    condition_frame = ttk.Frame(condition_tab)
+    condition_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
     # 都道府県選択
-    prefecture_frame = ttk.Frame(main_frame)
+    prefecture_frame = ttk.Frame(condition_frame)
     prefecture_frame.pack(fill=tk.X, pady=5)
     
     prefecture_label = ttk.Label(prefecture_frame, text="都道府県:", width=15)
@@ -319,68 +400,139 @@ def create_gui():
     prefecture_combo.set(prefecture_values[0])
     prefecture_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
     
-    # 開始ページ指定
-    page_frame = ttk.Frame(main_frame)
-    page_frame.pack(fill=tk.X, pady=5)
+    # ページ範囲指定フレーム
+    page_range_frame = ttk.LabelFrame(condition_frame, text="ページ範囲設定")
+    page_range_frame.pack(fill=tk.X, pady=10)
     
-    start_page_label = ttk.Label(page_frame, text="開始ページ:", width=15)
+    # 開始ページ指定
+    start_page_frame = ttk.Frame(page_range_frame)
+    start_page_frame.pack(fill=tk.X, pady=5)
+    
+    start_page_label = ttk.Label(start_page_frame, text="開始ページ:", width=15)
     start_page_label.pack(side=tk.LEFT)
     
-    start_page_entry = ttk.Entry(page_frame)
+    start_page_entry = ttk.Entry(start_page_frame, width=10)
     start_page_entry.insert(0, "1")
-    start_page_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    start_page_entry.pack(side=tk.LEFT, padx=(5, 10))
+    
+    # 終了ページ指定
+    end_page_label = ttk.Label(start_page_frame, text="終了ページ:", width=15)
+    end_page_label.pack(side=tk.LEFT)
+    
+    end_page_entry = ttk.Entry(start_page_frame, width=10)
+    end_page_entry.insert(0, "60")
+    end_page_entry.pack(side=tk.LEFT, padx=(5, 0))
+    
+    # ページ範囲の説明
+    page_info_label = ttk.Label(page_range_frame, text="※ 1~60ページの範囲で指定してください", font=("Helvetica", 8))
+    page_info_label.pack(pady=2)
     
     # オプションフレーム
-    options_frame = ttk.Frame(main_frame)
+    options_frame = ttk.Frame(condition_frame)
     options_frame.pack(fill=tk.X, pady=10)
-    
-    # 50ページ区切り
-    fifty_page_var = tk.BooleanVar(value=True)
-    fifty_page_check = ttk.Checkbutton(options_frame, text="50ページ区切り", variable=fifty_page_var)
-    fifty_page_check.pack(side=tk.LEFT, padx=(0, 20))
     
     # ニューオープン
     new_open_var = tk.BooleanVar(value=False)
     new_open_check = ttk.Checkbutton(options_frame, text="ニューオープン", variable=new_open_var)
     new_open_check.pack(side=tk.LEFT)
     
-    # 進捗バー
-    progress_frame = ttk.Frame(main_frame)
-    progress_frame.pack(fill=tk.X, pady=10)
+    # 保存設定フレーム
+    save_frame = ttk.LabelFrame(condition_frame, text="保存設定")
+    save_frame.pack(fill=tk.X, pady=10)
     
-    progress_var = tk.DoubleVar()
-    progress_bar = ttk.Progressbar(progress_frame, orient=tk.HORIZONTAL, length=100, mode='determinate', variable=progress_var)
-    progress_bar.pack(fill=tk.X)
+    # 保存先フォルダ
+    save_path_frame = ttk.Frame(save_frame)
+    save_path_frame.pack(fill=tk.X, pady=5)
     
-    progress_label = ttk.Label(progress_frame, text="進捗: 0/0 ページ")
-    progress_label.pack(pady=5)
+    save_path_label = ttk.Label(save_path_frame, text="保存先:")
+    save_path_label.pack(side=tk.LEFT)
     
-    # ステータスラベル
-    status_label = ttk.Label(main_frame, text="準備完了")
-    status_label.pack(pady=5)
+    save_path_var = tk.StringVar(value=os.path.expanduser("~\\Downloads"))
+    save_path_entry = ttk.Entry(save_path_frame, textvariable=save_path_var, state="readonly")
+    save_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+    
+    browse_button = ttk.Button(save_path_frame, text="参照", command=browse_save_path)
+    browse_button.pack(side=tk.RIGHT)
+    
+    # ファイル名
+    filename_frame = ttk.Frame(save_frame)
+    filename_frame.pack(fill=tk.X, pady=5)
+    
+    filename_label = ttk.Label(filename_frame, text="ファイル名:")
+    filename_label.pack(side=tk.LEFT)
+    
+    filename_entry = ttk.Entry(filename_frame)
+    filename_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+    filename_entry.insert(0, generate_default_filename())
     
     # スクレイピング実行ボタン
-    button_frame = ttk.Frame(main_frame)
-    button_frame.pack(pady=10)
+    button_frame = ttk.Frame(condition_frame)
+    button_frame.pack(pady=20)
     
-    area_scrape_button = ttk.Button(button_frame, text="スクレイピング開始", command=scrape_data_thread)
-    area_scrape_button.pack(ipadx=10, ipady=5)
+    start_button = ttk.Button(button_frame, text="スクレイピング開始", command=scrape_data_thread)
+    start_button.pack(ipadx=20, ipady=10)
     
     # 説明テキスト
     help_text = """
     使用方法：
     1. 対象の都道府県を選択（「全国」でも可）
-    2. 開始ページを指定（省略時は1）
+    2. ページ範囲を指定（1~60ページの範囲で指定）
     3. オプションを設定
-      - 50ページ区切り：ONにすると最大50ページまでスクレイピングします
       - ニューオープン：新規オープン店舗のみをスクレイピングします
-    4. 「スクレイピング開始」ボタンをクリックしてください
+    4. 保存先とファイル名を設定
+    5. 「スクレイピング開始」ボタンをクリックしてください
     
-    結果はDownloadsフォルダに保存されます。
+    スクレイピング中は「検索中」タブで進捗を確認できます。
     """
     
-    help_label = ttk.Label(main_frame, text=help_text, justify=tk.LEFT, wraplength=460)
+    help_label = ttk.Label(condition_frame, text=help_text, justify=tk.LEFT, wraplength=560)
     help_label.pack(pady=10)
+    
+    # === 検索中タブの内容 ===
+    search_frame = ttk.Frame(search_tab)
+    search_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    
+    # 進捗表示フレーム
+    progress_display_frame = ttk.LabelFrame(search_frame, text="進捗状況")
+    progress_display_frame.pack(fill=tk.X, pady=10)
+    
+    # 進捗バー
+    progress_var = tk.DoubleVar()
+    progress_bar = ttk.Progressbar(progress_display_frame, orient=tk.HORIZONTAL, length=100, mode='determinate', variable=progress_var)
+    progress_bar.pack(fill=tk.X, padx=10, pady=10)
+    
+    progress_label = ttk.Label(progress_display_frame, text="進捗: 0/0 ページ")
+    progress_label.pack(pady=5)
+    
+    # ステータス表示
+    status_frame = ttk.LabelFrame(search_frame, text="ステータス")
+    status_frame.pack(fill=tk.X, pady=10)
+    
+    status_label = ttk.Label(status_frame, text="準備完了", wraplength=560)
+    status_label.pack(pady=10)
+    
+    # 停止ボタン
+    stop_button_frame = ttk.Frame(search_frame)
+    stop_button_frame.pack(pady=20)
+    
+    stop_button = ttk.Button(stop_button_frame, text="検索を停止", command=stop_scraping_process)
+    stop_button.pack(ipadx=20, ipady=10)
+    
+    # 検索中タブの説明
+    search_help_text = """
+    検索の進行状況をこちらで確認できます。
+    
+    - 進捗バー：現在の処理状況を表示
+    - ステータス：詳細な処理状況を表示
+    - 検索を停止：現在の検索を中断します
+    
+    検索が完了または停止されると、自動的に「検索条件」タブに戻ります。
+    
+    ※ 食べログの仕様により、最大60ページまでの検索が可能です。
+    """
+    
+    search_help_label = ttk.Label(search_frame, text=search_help_text, justify=tk.LEFT, wraplength=560)
+    search_help_label.pack(pady=10)
     
     window.mainloop()
 
