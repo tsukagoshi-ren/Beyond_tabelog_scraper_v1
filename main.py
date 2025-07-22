@@ -1,60 +1,57 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import pandas as pd
-import os
-from datetime import datetime
-import requests_cache
-import requests
-from bs4 import BeautifulSoup
-import requests.exceptions
-import time
 import threading
+import time
+import sys
+import os
 
-os.environ['TK_SILENCE_DEPRECATION'] = '1'
-from cat import prefectures
+# スプラッシュスクリーンをインポート
+from splash_screen import SimpleSplash, SplashScreen
 
 # グローバル変数
 is_scraping = False
 stop_scraping = False
+_imports_loaded = False
+
+# 遅延インポートされるモジュール（スプラッシュスクリーンで初期化される）
+pd = None
+datetime = None
+requests_cache = None
+requests = None
+requests_exceptions = None
+BeautifulSoup = None
+prefectures = None
+
+def check_imports():
+    """必要なモジュールが読み込まれているかチェック"""
+    global _imports_loaded
+    if not _imports_loaded:
+        messagebox.showerror("エラー", "アプリケーションが正しく初期化されていません。")
+        return False
+    return True
 
 def generate_tabelog_url(prefecture_code, start_page, new_open_mode=False):
-    """
-    食べログのURLを正確に生成する関数
-    
-    Args:
-        prefecture_code (str): 都道府県コード
-        start_page (int): 開始ページ
-        new_open_mode (bool): ニューオープンモードかどうか
-    
-    Returns:
-        str: 生成されたURL
-    """
+    """食べログのURLを正確に生成する関数"""
     base_url = "https://tabelog.com"
     
-    # ニューオープンモードの場合
     if new_open_mode:
         if prefecture_code:
-            # ニューオープンモードでページ指定がある場合の処理
             if start_page > 1:
                 url = f"{base_url}/{prefecture_code}/rstLst/cond16-00-00/{start_page}/"
             else:
                 url = f"{base_url}/{prefecture_code}/rstLst/cond16-00-00/"
         else:
-            # 全国のニューオープンモード
             if start_page > 1:
                 url = f"{base_url}/rstLst/cond16-00-00/{start_page}/"
             else:
                 url = f"{base_url}/rstLst/cond16-00-00/"
     else:
-        # 通常のスクレイピングモード
         if prefecture_code:
-            # ページ番号を正確に計算
             if start_page > 1:
                 url = f"{base_url}/{prefecture_code}/rstLst/{start_page}/"
             else:
                 url = f"{base_url}/{prefecture_code}/rstLst/"
         else:
-            # 全国の場合
             if start_page > 1:
                 url = f"{base_url}/rstLst/{start_page}/"
             else:
@@ -63,23 +60,28 @@ def generate_tabelog_url(prefecture_code, start_page, new_open_mode=False):
     return url
 
 def scrape_shop_details(shop_url):
+    """店舗詳細をスクレイピングする関数"""
+    if not check_imports():
+        return {}
+    
     retry_count = 0
     max_retries = 3
     wait_time = 5
+    
     while retry_count < max_retries:
         try:
             shop_response = requests.get(shop_url, timeout=10)
             shop_response.raise_for_status()
             shop_soup = BeautifulSoup(shop_response.text, 'html.parser')
             
-            # より柔軟なセレクタを使用
+            # 店舗情報の抽出
             name_element = shop_soup.find('h2', class_='display-name') or shop_soup.find('h2', class_='rstdtl-header__rst-name')
             name = name_element.text.strip() if name_element else '店舗名がありません'
             
             address_element = shop_soup.find('p', class_='rstinfo-table__address') or shop_soup.find('p', class_='rstinfo-table__address-text')
             address = address_element.text.strip() if address_element else '住所がありません'
             
-            # より汎用的な方法で営業時間を取得
+            # 営業時間の取得
             opening_hours_element = None
             for heading in shop_soup.find_all(['th', 'dt']):
                 if '営業時間' in heading.text:
@@ -96,7 +98,7 @@ def scrape_shop_details(shop_url):
             instagram_element = shop_soup.find('a', class_='rstinfo-sns-instagram')
             instagram = instagram_element['href'] if instagram_element and 'href' in instagram_element.attrs else 'Instagramがありません'
             
-            # よりロバストな方法でサービスとジャンルを取得
+            # サービスとジャンルの取得
             service = 'サービスがありません'
             genre = 'ジャンルがありません'
             
@@ -121,18 +123,13 @@ def scrape_shop_details(shop_url):
                 '公式アカウント': instagram,
                 'サービス': service
             }
-        except requests.exceptions.RequestException as e:
+            
+        except Exception as e:
             print(f'{shop_url}でエラーが発生しました: {e}')
             retry_count += 1
             time.sleep(wait_time)
-            wait_time *= 2  # エクスポネンシャルバックオフ
-        except AttributeError as e:
-            print(f'{shop_url}で要素の取得に失敗しました: {e}')
-            retry_count += 1
-            time.sleep(wait_time)
-        except Exception as e:
-            print(f'{shop_url}で予期しないエラーが発生しました: {e}')
-            return {}
+            wait_time *= 2
+            
     return {}
 
 def update_progress(value, max_value):
@@ -148,6 +145,9 @@ def update_status(text):
 
 def get_prefecture_code(prefecture):
     """都道府県名から都道府県コードを取得する"""
+    if not check_imports():
+        return ""
+    
     if prefecture == "全国":
         return ""
     return prefectures.prefectures_values.get(prefecture, "")
@@ -160,6 +160,9 @@ def browse_save_path():
 
 def generate_default_filename():
     """デフォルトのファイル名を生成する"""
+    if not check_imports():
+        return "default_filename.xlsx"
+    
     prefecture = prefecture_combo.get()
     new_open_mode = new_open_var.get()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -181,21 +184,22 @@ def stop_scraping_process():
     update_status("スクレイピングを停止しています...")
 
 def scrape_data_thread():
-    """別スレッドでスクレイピングを実行する（UIのフリーズを防ぐ）"""
+    """別スレッドでスクレイピングを実行する"""
     thread = threading.Thread(target=scrape_data)
     thread.daemon = True
     thread.start()
 
 def scrape_data():
     """スクレイピングを実行する"""
+    if not check_imports():
+        return
+    
     global is_scraping, stop_scraping
     is_scraping = True
     stop_scraping = False
     
     # 検索中タブに切り替え
     notebook.select(search_tab)
-    
-    # 検索条件タブを無効化
     notebook.tab(condition_tab, state="disabled")
     
     update_status("スクレイピングの準備中...")
@@ -207,7 +211,7 @@ def scrape_data():
     
     # ページ範囲の検証
     if start_page < 1 or end_page < 1 or start_page > end_page:
-        messagebox.showerror("エラー", "ページ範囲が正しくありません。開始ページと終了ページを正しく入力してください。")
+        messagebox.showerror("エラー", "ページ範囲が正しくありません。")
         notebook.tab(condition_tab, state="normal")
         notebook.select(condition_tab)
         is_scraping = False
@@ -233,28 +237,23 @@ def scrape_data():
     if not filename:
         filename = generate_default_filename()
     
-    # 拡張子の確認
     if not filename.endswith('.xlsx'):
         filename += '.xlsx'
     
     prefecture_code = get_prefecture_code(prefecture)
-    
-    # 新しいURL生成関数を使用
     current_url = generate_tabelog_url(prefecture_code, start_page, new_open_mode)
     
     update_status(f"スクレイピング開始: {current_url}")
     all_scraped_data = []
-    page_count = start_page  # start_pageから開始
-    pages_scraped = 0  # 実際にスクレイピングしたページ数
+    page_count = start_page
+    pages_scraped = 0
     
-    # 進捗バーの初期化
     progress_var.set(0)
     
     while current_url and page_count <= end_page and not stop_scraping:
         update_status(f"スクレイピング中: ページ {page_count}/{end_page}")
         update_progress(pages_scraped + 1, total_pages)
         
-        print(f"スクレイピング中: {current_url}, ページ数: {page_count}")
         try:
             response = requests.get(current_url)
             response.raise_for_status()
@@ -263,7 +262,6 @@ def scrape_data():
             
             shop_count = len(shop_list)
             if shop_count == 0:
-                print("このページには店舗がありません。")
                 break
                 
             for i, shop in enumerate(shop_list):
@@ -277,21 +275,16 @@ def scrape_data():
                     shop_data = scrape_shop_details(shop_url)
                     all_scraped_data.append(shop_data)
                 else:
-                    print("店舗詳細URLが見つかりませんでした。")
                     all_scraped_data.append({})
                 
-                # 負荷軽減のための待機
                 time.sleep(0.5)
             
             if stop_scraping:
                 break
             
-            # このページのスクレイピングが完了
             pages_scraped += 1
             
-            # 指定された終了ページに達したかチェック
             if page_count >= end_page:
-                print(f"指定された終了ページ({end_page}ページ)に達しました。スクレイピングを終了します。")
                 break
             
             # 次のページを探す
@@ -302,36 +295,25 @@ def scrape_data():
                     next_url = "https://tabelog.com" + next_url
                 current_url = next_url
                 page_count += 1
-                # ページ間の待機時間を長めに設定
                 time.sleep(2)
             else:
-                print("次のページはありません。")
                 break
                 
-        except requests.exceptions.RequestException as e:
-            print(f'{current_url}でエラーが発生しました: {e}')
+        except Exception as e:
             update_status(f"エラーが発生しました: {e}")
-            time.sleep(5)  # エラーが発生した場合、少し長めに待機
-            break
-        except Exception as e:  # 一般的な例外処理を追加
-            print(f'予期しないエラーが発生しました: {e}')
-            update_status(f"予期しないエラーが発生しました: {e}")
             break
     
     # 結果の保存
     if all_scraped_data and not stop_scraping:
         update_status("データをExcelに保存中...")
         df = pd.DataFrame(all_scraped_data)
-        
-        # 不要な空のデータを除外
         df = df[df['店舗名'] != '店舗名がありません']
         
         file_path = os.path.join(save_path, filename)
         
         try:
             df.to_excel(file_path, index=False)
-            update_status(f"スクレイピングが完了しました。{filename}に結果が保存されました。")
-            print(f'スクレイピングが完了しました。{filename}に結果が保存されました。')
+            update_status(f"スクレイピングが完了しました。")
             messagebox.showinfo("完了", f"スクレイピングが完了しました。\n{file_path}に結果が保存されました。")
         except Exception as e:
             update_status(f"ファイル保存中にエラーが発生しました: {e}")
@@ -340,23 +322,15 @@ def scrape_data():
         update_status("スクレイピングが停止されました。")
         messagebox.showinfo("停止", "スクレイピングが停止されました。")
     else:
-        update_status("スクレイピングに失敗しました。データが取得できませんでした。")
-        messagebox.showerror("エラー", "スクレイピングに失敗しました。データが取得できませんでした。")
-        print('スクレイピングに失敗しました。')
+        update_status("スクレイピングに失敗しました。")
+        messagebox.showerror("エラー", "スクレイピングに失敗しました。")
     
     # 検索条件タブを有効化
     notebook.tab(condition_tab, state="normal")
-    
-    # 検索条件タブに切り替え
     notebook.select(condition_tab)
     
     is_scraping = False
     stop_scraping = False
-
-def on_filename_change(*args):
-    """ファイル名が変更されたときの処理"""
-    if not filename_entry.get():
-        filename_entry.insert(0, generate_default_filename())
 
 def create_gui():
     """GUIを作成する"""
@@ -395,16 +369,23 @@ def create_gui():
     prefecture_label = ttk.Label(prefecture_frame, text="都道府県:", width=15)
     prefecture_label.pack(side=tk.LEFT)
     
-    prefecture_values = ["全国"] + list(prefectures.prefectures_values.keys())
-    prefecture_combo = ttk.Combobox(prefecture_frame, values=prefecture_values)
-    prefecture_combo.set(prefecture_values[0])
+    # 初期値として一時的なリストを設定
+    prefecture_combo = ttk.Combobox(prefecture_frame, values=["全国"])
+    prefecture_combo.set("全国")
     prefecture_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    
+    # フォーカス時に都道府県リストを読み込み
+    def on_prefecture_focus(event):
+        if check_imports():
+            prefecture_values = ["全国"] + list(prefectures.prefectures_values.keys())
+            prefecture_combo['values'] = prefecture_values
+    
+    prefecture_combo.bind('<Button-1>', on_prefecture_focus)
     
     # ページ範囲指定フレーム
     page_range_frame = ttk.LabelFrame(condition_frame, text="ページ範囲設定")
     page_range_frame.pack(fill=tk.X, pady=10)
     
-    # 開始ページ指定
     start_page_frame = ttk.Frame(page_range_frame)
     start_page_frame.pack(fill=tk.X, pady=5)
     
@@ -415,7 +396,6 @@ def create_gui():
     start_page_entry.insert(0, "1")
     start_page_entry.pack(side=tk.LEFT, padx=(5, 10))
     
-    # 終了ページ指定
     end_page_label = ttk.Label(start_page_frame, text="終了ページ:", width=15)
     end_page_label.pack(side=tk.LEFT)
     
@@ -423,7 +403,6 @@ def create_gui():
     end_page_entry.insert(0, "60")
     end_page_entry.pack(side=tk.LEFT, padx=(5, 0))
     
-    # ページ範囲の説明
     page_info_label = ttk.Label(page_range_frame, text="※ 1~60ページの範囲で指定してください", font=("Helvetica", 8))
     page_info_label.pack(pady=2)
     
@@ -431,7 +410,6 @@ def create_gui():
     options_frame = ttk.Frame(condition_frame)
     options_frame.pack(fill=tk.X, pady=10)
     
-    # ニューオープン
     new_open_var = tk.BooleanVar(value=False)
     new_open_check = ttk.Checkbutton(options_frame, text="ニューオープン", variable=new_open_var)
     new_open_check.pack(side=tk.LEFT)
@@ -440,7 +418,6 @@ def create_gui():
     save_frame = ttk.LabelFrame(condition_frame, text="保存設定")
     save_frame.pack(fill=tk.X, pady=10)
     
-    # 保存先フォルダ
     save_path_frame = ttk.Frame(save_frame)
     save_path_frame.pack(fill=tk.X, pady=5)
     
@@ -454,7 +431,6 @@ def create_gui():
     browse_button = ttk.Button(save_path_frame, text="参照", command=browse_save_path)
     browse_button.pack(side=tk.RIGHT)
     
-    # ファイル名
     filename_frame = ttk.Frame(save_frame)
     filename_frame.pack(fill=tk.X, pady=5)
     
@@ -463,7 +439,13 @@ def create_gui():
     
     filename_entry = ttk.Entry(filename_frame)
     filename_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
-    filename_entry.insert(0, generate_default_filename())
+    
+    # ファイル名の初期値設定（フォーカス時に生成）
+    def on_filename_focus(event):
+        if not filename_entry.get():
+            filename_entry.insert(0, generate_default_filename())
+    
+    filename_entry.bind('<FocusIn>', on_filename_focus)
     
     # スクレイピング実行ボタン
     button_frame = ttk.Frame(condition_frame)
@@ -492,11 +474,9 @@ def create_gui():
     search_frame = ttk.Frame(search_tab)
     search_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
-    # 進捗表示フレーム
     progress_display_frame = ttk.LabelFrame(search_frame, text="進捗状況")
     progress_display_frame.pack(fill=tk.X, pady=10)
     
-    # 進捗バー
     progress_var = tk.DoubleVar()
     progress_bar = ttk.Progressbar(progress_display_frame, orient=tk.HORIZONTAL, length=100, mode='determinate', variable=progress_var)
     progress_bar.pack(fill=tk.X, padx=10, pady=10)
@@ -504,21 +484,18 @@ def create_gui():
     progress_label = ttk.Label(progress_display_frame, text="進捗: 0/0 ページ")
     progress_label.pack(pady=5)
     
-    # ステータス表示
     status_frame = ttk.LabelFrame(search_frame, text="ステータス")
     status_frame.pack(fill=tk.X, pady=10)
     
     status_label = ttk.Label(status_frame, text="準備完了", wraplength=560)
     status_label.pack(pady=10)
     
-    # 停止ボタン
     stop_button_frame = ttk.Frame(search_frame)
     stop_button_frame.pack(pady=20)
     
     stop_button = ttk.Button(stop_button_frame, text="検索を停止", command=stop_scraping_process)
     stop_button.pack(ipadx=20, ipady=10)
     
-    # 検索中タブの説明
     search_help_text = """
     検索の進行状況をこちらで確認できます。
     
@@ -537,5 +514,16 @@ def create_gui():
     window.mainloop()
 
 if __name__ == "__main__":
-    requests_cache.install_cache('tabelog_cache', expire_after=3600)
-    create_gui()
+    # スプラッシュスクリーンの選択（SimpleSplash または SplashScreen）
+    USE_DETAILED_SPLASH = False  # Falseにすると高速なSimpleSplashを使用
+    
+    if USE_DETAILED_SPLASH:
+        splash = SplashScreen()
+    else:
+        splash = SimpleSplash()
+    
+    # メインアプリケーション関数を設定
+    splash.set_main_app_function(create_gui)
+    
+    # スプラッシュスクリーンを表示してアプリケーションを開始
+    splash.show()
