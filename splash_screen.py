@@ -37,7 +37,7 @@ class SplashScreen:
         # バージョン情報
         version_label = tk.Label(
             main_frame, 
-            text="Version 2.1", 
+            text="Version 2.0", 
             font=("Helvetica", 10),
             bg='#f0f0f0',
             fg='#666666'
@@ -73,14 +73,14 @@ class SplashScreen:
         self.status_label.pack(pady=5)
         
         # コピーライト
-        copyright_label = tk.Label(
-            main_frame, 
-            text="© 2024 TabelogScraper", 
-            font=("Helvetica", 8),
-            bg='#f0f0f0',
-            fg='#999999'
-        )
-        copyright_label.pack(side='bottom', pady=10)
+        # copyright_label = tk.Label(
+        #     main_frame, 
+        #     text="© 2024 TabelogScraper", 
+        #     font=("Helvetica", 8),
+        #     bg='#f0f0f0',
+        #     fg='#999999'
+        # )
+        # copyright_label.pack(side='bottom', pady=10)
         
         # 進捗バーをアニメーション開始
         self.progress.start(10)

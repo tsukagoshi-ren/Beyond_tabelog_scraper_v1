@@ -132,10 +132,11 @@ def scrape_shop_details(shop_url):
             
     return {}
 
-def update_progress(value, max_value):
-    """進捗バーを更新する"""
-    progress_var.set(value / max_value * 100)
-    progress_label.config(text=f"進捗: {value}/{max_value} ページ")
+def update_progress(page_value, page_max, item_count=0):
+    """進捗バーを更新する（ページ進捗と取得件数を表示）"""
+    progress_var.set(page_value / page_max * 100)
+    progress_label.config(text=f"ページ進捗: {page_value}/{page_max} ページ")
+    item_count_label.config(text=f"取得件数: {item_count} 件")
     window.update()
 
 def update_status(text):
@@ -176,6 +177,19 @@ def generate_default_filename():
         file_prefix += "_ニューオープン"
         
     return f"{file_prefix}_scraped_data_{timestamp}.xlsx"
+
+def generate_auto_filename():
+    """自動ボタン用のファイル名生成関数"""
+    filename = generate_default_filename()
+    # 拡張子を除去
+    if filename.endswith('.xlsx'):
+        filename = filename[:-5]
+    return filename
+
+def auto_generate_filename():
+    """自動ボタンが押された時の処理"""
+    filename_entry.delete(0, tk.END)
+    filename_entry.insert(0, generate_auto_filename())
 
 def stop_scraping_process():
     """スクレイピングを停止する"""
@@ -229,14 +243,15 @@ def scrape_data():
     
     # 保存先とファイル名の取得
     save_path = save_path_var.get()
-    filename = filename_entry.get()
+    filename = filename_entry.get().strip()
     
     if not save_path:
         save_path = os.path.expanduser("~\\Downloads")
     
     if not filename:
-        filename = generate_default_filename()
+        filename = generate_auto_filename()
     
+    # 拡張子を自動で付与
     if not filename.endswith('.xlsx'):
         filename += '.xlsx'
     
@@ -247,12 +262,13 @@ def scrape_data():
     all_scraped_data = []
     page_count = start_page
     pages_scraped = 0
+    total_items = 0  # 取得件数をカウント
     
     progress_var.set(0)
     
     while current_url and page_count <= end_page and not stop_scraping:
         update_status(f"スクレイピング中: ページ {page_count}/{end_page}")
-        update_progress(pages_scraped + 1, total_pages)
+        update_progress(pages_scraped + 1, total_pages, total_items)
         
         try:
             response = requests.get(current_url)
@@ -273,7 +289,10 @@ def scrape_data():
                 if detail_url_element and 'href' in detail_url_element.attrs:
                     shop_url = detail_url_element['href']
                     shop_data = scrape_shop_details(shop_url)
+                    if shop_data and shop_data.get('店舗名') != '店舗名がありません':
+                        total_items += 1
                     all_scraped_data.append(shop_data)
+                    update_progress(pages_scraped + 1, total_pages, total_items)
                 else:
                     all_scraped_data.append({})
                 
@@ -335,7 +354,7 @@ def scrape_data():
 def create_gui():
     """GUIを作成する"""
     global prefecture_combo, start_page_entry, end_page_entry, new_open_var, window
-    global progress_var, progress_label, status_label, new_open_check
+    global progress_var, progress_label, status_label, new_open_check, item_count_label
     global notebook, condition_tab, search_tab, save_path_var, filename_entry
     
     window = tk.Tk()
@@ -403,7 +422,7 @@ def create_gui():
     end_page_entry.insert(0, "60")
     end_page_entry.pack(side=tk.LEFT, padx=(5, 0))
     
-    page_info_label = ttk.Label(page_range_frame, text="※ 1~60ページの範囲で指定してください", font=("Helvetica", 8))
+    page_info_label = ttk.Label(page_range_frame, text="※ 1~60ページの範囲で指定してください（食べログの仕様により最大60ページまで）", font=("Helvetica", 8))
     page_info_label.pack(pady=2)
     
     # オプションフレーム
@@ -438,12 +457,20 @@ def create_gui():
     filename_label.pack(side=tk.LEFT)
     
     filename_entry = ttk.Entry(filename_frame)
-    filename_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+    filename_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+    
+    # 自動ボタン
+    auto_button = ttk.Button(filename_frame, text="自動", command=auto_generate_filename, width=6)
+    auto_button.pack(side=tk.RIGHT, padx=(5, 0))
+    
+    # 拡張子表示
+    extension_label = ttk.Label(filename_frame, text=".xlsx", font=("Helvetica", 9), foreground="gray")
+    extension_label.pack(side=tk.RIGHT)
     
     # ファイル名の初期値設定（フォーカス時に生成）
     def on_filename_focus(event):
         if not filename_entry.get():
-            filename_entry.insert(0, generate_default_filename())
+            filename_entry.insert(0, generate_auto_filename())
     
     filename_entry.bind('<FocusIn>', on_filename_focus)
     
@@ -481,8 +508,11 @@ def create_gui():
     progress_bar = ttk.Progressbar(progress_display_frame, orient=tk.HORIZONTAL, length=100, mode='determinate', variable=progress_var)
     progress_bar.pack(fill=tk.X, padx=10, pady=10)
     
-    progress_label = ttk.Label(progress_display_frame, text="進捗: 0/0 ページ")
-    progress_label.pack(pady=5)
+    progress_label = ttk.Label(progress_display_frame, text="ページ進捗: 0/0 ページ")
+    progress_label.pack(pady=2)
+    
+    item_count_label = ttk.Label(progress_display_frame, text="取得件数: 0 件")
+    item_count_label.pack(pady=2)
     
     status_frame = ttk.LabelFrame(search_frame, text="ステータス")
     status_frame.pack(fill=tk.X, pady=10)
@@ -499,13 +529,13 @@ def create_gui():
     search_help_text = """
     検索の進行状況をこちらで確認できます。
     
-    - 進捗バー：現在の処理状況を表示
+    - 進捗バー：現在のページ処理状況を表示
+    - ページ進捗：処理中のページ数を表示
+    - 取得件数：実際に取得できた店舗数を表示
     - ステータス：詳細な処理状況を表示
     - 検索を停止：現在の検索を中断します
     
     検索が完了または停止されると、自動的に「検索条件」タブに戻ります。
-    
-    ※ 食べログの仕様により、最大60ページまでの検索が可能です。
     """
     
     search_help_label = ttk.Label(search_frame, text=search_help_text, justify=tk.LEFT, wraplength=560)
@@ -515,7 +545,7 @@ def create_gui():
 
 if __name__ == "__main__":
     # スプラッシュスクリーンの選択（SimpleSplash または SplashScreen）
-    USE_DETAILED_SPLASH = False  # Falseにすると高速なSimpleSplashを使用
+    USE_DETAILED_SPLASH = True  # Falseにすると高速なSimpleSplashを使用
     
     if USE_DETAILED_SPLASH:
         splash = SplashScreen()
